@@ -1,14 +1,14 @@
 dnl Process this file with autoconf to produce a configure script.
-AC_PREREQ(2.59)
-AC_INIT(alsa-utils, 1.2.6)
+AC_PREREQ([2.72])
+AC_INIT([alsa-utils], [1.2.16])
 AC_CONFIG_SRCDIR([aplay/aplay.c])
 AC_PREFIX_DEFAULT(/usr)
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([subdir-objects])
 
 AM_MAINTAINER_MODE([enable])
 
 AM_GNU_GETTEXT([external])
-AM_GNU_GETTEXT_VERSION([0.19.8])
+AM_GNU_GETTEXT_VERSION([0.25.1])
 
 dnl Checks for programs.
 
@@ -18,12 +18,17 @@ AC_PROG_INSTALL
 AC_PROG_MKDIR_P
 AC_PROG_LN_S
 AC_PROG_SED
+AC_DISABLE_STATIC
+LT_INIT
 PKG_PROG_PKG_CONFIG
-AM_PATH_ALSA(1.2.5)
+AM_PATH_ALSA(1.2.13)
 if test "x$enable_alsatest" = "xyes"; then
 AC_CHECK_FUNC([snd_ctl_elem_add_enumerated],
-	      , [AC_ERROR([No user enum control support in alsa-lib])])
+	      , [AC_MSG_ERROR(No user enum control support in alsa-lib)])
 fi
+
+
+AC_CHECK_HEADERS([dlfcn.h malloc.h])
 
 dnl Check components
 AC_CHECK_HEADERS([alsa/pcm.h], [have_pcm="yes"], [have_pcm="no"],
@@ -42,13 +47,6 @@ AC_CHECK_HEADERS([samplerate.h], [have_samplerate="yes"], [have_samplerate="no"]
   [#include <samplerate.h>])
 
 AC_CHECK_LIB([asound], [snd_seq_client_info_get_card], [HAVE_SEQ_CLIENT_INFO_GET_CARD="yes"])
-if test "$HAVE_SEQ_CLIENT_INFO_GET_CARD" = "yes" ; then
-    AC_DEFINE([HAVE_SEQ_CLIENT_INFO_GET_CARD], 1, [alsa-lib supports snd_seq_client_info_get_card])
-fi
-AC_CHECK_LIB([asound], [snd_seq_client_info_get_pid], [HAVE_SEQ_CLIENT_INFO_GET_PID="yes"])
-if test "$HAVE_SEQ_CLIENT_INFO_GET_PID" = "yes" ; then
-    AC_DEFINE([HAVE_SEQ_CLIENT_INFO_GET_PID], 1, [alsa-lib supports snd_seq_client_info_get_pid])
-fi
 AC_CHECK_LIB([atopology], [snd_tplg_save], [have_topology="yes"], [have_topology="no"])
 
 #
@@ -72,7 +70,7 @@ AM_CONDITIONAL(HAVE_MIXER, test "$have_mixer" = "yes")
 AM_CONDITIONAL(HAVE_RAWMIDI, test "$have_rawmidi" = "yes")
 AM_CONDITIONAL(HAVE_SEQ, test "$have_seq" = "yes")
 AM_CONDITIONAL(HAVE_UCM, test "$have_ucm" = "yes")
-AM_CONDITIONAL(HAVE_TOPOLOGY, test "$have_topology" = "yes")
+AM_CONDITIONAL(HAVE_TOPOLOGY, test "$have_topology" = "yes" -a "$ac_cv_header_dlfcn_h" = "yes")
 AM_CONDITIONAL(HAVE_SAMPLERATE, test "$have_samplerate" = "yes")
 AM_CONDITIONAL(HAVE_FFADO, test "$have_ffado" = "yes")
 
@@ -184,6 +182,16 @@ AC_ARG_ENABLE(alsaloop,
      esac],[alsaloop=true])
 AM_CONDITIONAL(ALSALOOP, test x$alsaloop = xtrue)
 
+dnl Disable nhlt
+AC_ARG_ENABLE(nhlt,
+     AS_HELP_STRING([--disable-nhlt], [Disable nhlt packaging]),
+     [case "${enableval}" in
+       yes) nhlt=true ;;
+       no)  nhlt=false ;;
+       *) AC_MSG_ERROR(bad value ${enableval} for --enable-nhlt) ;;
+     esac],[nhlt=true])
+AM_CONDITIONAL(NHLT, test x$nhlt = xtrue)
+
 xmlto_available=""
 AC_ARG_ENABLE(xmlto,
  AS_HELP_STRING([--disable-xmlto], [Disable man page creation via xmlto]),
@@ -214,8 +222,6 @@ AC_ARG_WITH(
         fi])
 AC_SUBST(udevrulesdir)
 
-dnl Checks for header files.
-AC_HEADER_STDC
 if test x$alsamixer = xtrue; then
   AC_ARG_WITH(curses,
     AS_HELP_STRING([--with-curses=libname], [Specify the curses library to use (default=auto)]),
@@ -305,7 +311,7 @@ if test x$alsamixer = xtrue; then
   fi
   LIBS="$CURSESLIB $LIBS"
 
-  AC_TRY_LINK([#include <panel.h>], [set_escdelay(100);],[HAVE_CURSES_ESCDELAY="yes"])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <panel.h>]], [[set_escdelay(100);]])],[HAVE_CURSES_ESCDELAY="yes"],[])
   if test "$HAVE_CURSES_ESCDELAY" = "yes"; then
     AC_DEFINE([HAVE_CURSES_ESCDELAY], 1, [Have curses set_escdelay])
   fi
@@ -317,15 +323,14 @@ if test x$alsamixer = xtrue; then
     dnl check for wide-character support.
     dnl For ncurses/ncursesw, CURSES_NLS was already set above.
     if test "$curseslib" = "curses"; then
-      AC_TRY_LINK([
+      AC_LINK_IFELSE([AC_LANG_PROGRAM([[
           #define _XOPEN_SOURCE 1
           #define _XOPEN_SOURCE_EXTENDED 1
           #include <curses.h>
-        ], [
+        ]], [[
           cchar_t wc;
           setcchar(&wc, L"x", A_NORMAL, 0, 0);
-        ],
-        [CURSES_NLS="yes"])
+        ]])],[CURSES_NLS="yes"],[])
     fi
     AC_MSG_RESULT([$CURSES_NLS])
     if test "$CURSES_NLS" = "yes"; then
@@ -363,6 +368,7 @@ AC_SUBST(CURSESLIB)
 AC_SUBST(CURSES_CFLAGS)
 
 test "x$prefix" = xNONE && prefix=$ac_default_prefix
+test "x$exec_prefix" = xNONE && exec_prefix=$prefix
 
 eval dir="$datadir"
 case "$dir" in
@@ -388,10 +394,6 @@ AC_CONFIG_HEADERS(include/aconfig.h)
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST
 AC_C_INLINE
-AC_HEADER_TIME
-
-dnl Checks for library functions.
-AC_PROG_GCC_TRADITIONAL
 
 dnl Enable largefile support
 AC_SYS_LARGEFILE
@@ -410,8 +412,8 @@ AC_ARG_WITH([systemdsystemunitdir],
 if test "x$with_systemdsystemunitdir" != xno; then
         AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])
 fi
-AM_CONDITIONAL(HAVE_SYSTEMD, [test "$have_min_systemd" = "yes" \
-        -a -n "$with_systemdsystemunitdir" -a "x$with_systemdsystemunitdir" != xno ])
+AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$with_systemdsystemunitdir" \
+			      -a "x$with_systemdsystemunitdir" != xno ])
 
 AC_ARG_WITH([asound-state-dir],
         AS_HELP_STRING([--with-asound-state-dir=DIR], [Directory to place asound.state file in]),
@@ -437,16 +439,53 @@ AC_ARG_WITH([alsactl-daemonswitch],
         [ALSACTL_DAEMONSWITCH="/etc/alsa/state-daemon.conf"])
 AC_SUBST(ALSACTL_DAEMONSWITCH)
 
-AC_OUTPUT(Makefile alsactl/Makefile alsactl/init/Makefile \
+AC_ARG_WITH([alsactl-udev-extra-test],
+        AS_HELP_STRING([--with-alsactl-udev-extra-test=TEST], [Extra udev tests]),
+        [ALSACTL_UDEV_EXTRATEST="$withval"],
+        [ALSACTL_UDEV_EXTRATEST="default"])
+if test "$ALSACTL_UDEV_EXTRATEST" = "default"; then
+  ALSACTL_UDEV_EXTRATEST="TEST==\"${sbindir}\", TEST==\"${mydatadir}\","
+fi
+AC_SUBST(ALSACTL_UDEV_EXTRATEST)
+
+AC_ARG_WITH([alsactl-udev-args],
+        AS_HELP_STRING([--with-alsactl-udev-args=ARGS], [Extra alsactl arguments (udev rules)]),
+        [ALSACTL_UDEV_ARGS="$withval"],
+        [ALSACTL_UDEV_ARGS=""])
+AC_SUBST(ALSACTL_UDEV_ARGS)
+
+dnl pre-process plugin directory
+AC_ARG_WITH(plugindir,
+    AS_HELP_STRING([--with-plugindir=dir],
+	[path where pre-process plugin files are stored]),
+    plugindir="$withval", plugindir="")
+if test -z "$plugindir"; then
+    eval dir="$libdir"
+    echo ${exec_prefix}
+    echo $libdir
+    echo $dir
+    case "$dir" in
+    /*) ;;
+    *) dir="$dir"
+    esac
+    plugindir="$dir/alsa-topology"
+fi
+AC_DEFINE_UNQUOTED(ALSA_TOPOLOGY_PLUGIN_DIR, "$plugindir", [directory containing ALSA topology pre-process plugins])
+ALSA_TOPOLOGY_PLUGIN_DIR="$plugindir"
+AC_SUBST(ALSA_TOPOLOGY_PLUGIN_DIR)
+
+AC_CONFIG_FILES([Makefile alsactl/Makefile alsactl/init/Makefile \
 	  alsamixer/Makefile amidi/Makefile amixer/Makefile \
 	  m4/Makefile po/Makefile.in \
 	  alsaconf/alsaconf alsaconf/Makefile \
 	  alsaconf/po/Makefile \
-	  alsaucm/Makefile topology/Makefile \
+	  alsaucm/Makefile topology/Makefile topology/nhlt/Makefile \
 	  bat/Makefile bat/tests/Makefile bat/tests/asound_state/Makefile \
 	  aplay/Makefile include/Makefile iecset/Makefile utils/Makefile \
 	  utils/alsa-utils.spec seq/Makefile seq/aconnect/Makefile \
-	  seq/aplaymidi/Makefile seq/aseqdump/Makefile seq/aseqnet/Makefile \
-	  speaker-test/Makefile speaker-test/samples/Makefile \
+	  seq/aplaymidi/Makefile seq/aplaymidi2/Makefile seq/aseqdump/Makefile seq/aseqnet/Makefile \
+	  seq/aseqsend/Makefile speaker-test/Makefile speaker-test/samples/Makefile \
 	  alsaloop/Makefile alsa-info/Makefile \
-	  axfer/Makefile axfer/test/Makefile)
+	  axfer/Makefile axfer/test/Makefile \
+	  nhlt/Makefile])
+AC_OUTPUT

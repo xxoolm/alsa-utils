@@ -3,11 +3,11 @@
  *   ver.0.1.3
  *
  * Copyright (C) 1999 Takashi Iwai
- * 
+ *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2 as
  *  published by the Free Software Foundation.
- * 
+ *
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -15,6 +15,7 @@
  *
  */
 
+#include "aconfig.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
@@ -26,23 +27,36 @@
 #include <locale.h>
 #include <sys/ioctl.h>
 #include <alsa/asoundlib.h>
-#include "aconfig.h"
 #include "gettext.h"
 
-static void error_handler(const char *file, int line, const char *function, int err, const char *fmt, ...)
+static int show_all;
+
+
+#if SND_LIB_VER(1, 2, 15) < SND_LIB_VERSION
+static void error_handler(const char *file, int line, const char *function, int errcode, const char *fmt, ...)
 {
 	va_list arg;
 
-	if (err == ENOENT)	/* Ignore those misleading "warnings" */
+	if (errcode == ENOENT)	/* Ignore those misleading "warnings" */
 		return;
 	va_start(arg, fmt);
 	fprintf(stderr, "ALSA lib %s:%i:(%s) ", file, line, function);
 	vfprintf(stderr, fmt, arg);
-	if (err)
-		fprintf(stderr, ": %s", snd_strerror(err));
+	if (errcode)
+		fprintf(stderr, ": %s", snd_strerror(errcode));
 	putc('\n', stderr);
 	va_end(arg);
 }
+#else
+static snd_lib_log_handler_t original_log_handler;
+static void log_handler(int prio, int interface, const char *file, int line, const char *function, int errcode, const char *fmt, va_list arg)
+{
+	if (prio == SND_LOG_ERROR && errcode == ENOENT)	/* Ignore those misleading "warnings" */
+		return;
+	if (original_log_handler)
+		original_log_handler(prio, interface, file, line, function, errcode, fmt, arg);
+}
+#endif
 
 static void usage(void)
 {
@@ -60,6 +74,7 @@ static void usage(void)
 	printf(_("   aconnect -i|-o [-options]\n"));
 	printf(_("     -i,--input          list input (readable) ports\n"));
 	printf(_("     -o,--output         list output (writable) ports\n"));
+	printf(_("     -a,--all            show inactive ports, too\n"));
 	printf(_("     -l,--list           list current connections of each port\n"));
 	printf(_(" * Remove all exported connections\n"));
 	printf(_("     -x, --removeall\n"));
@@ -72,25 +87,34 @@ static void usage(void)
 #define LIST_INPUT	1
 #define LIST_OUTPUT	2
 
-#define perm_ok(pinfo,bits) ((snd_seq_port_info_get_capability(pinfo) & (bits)) == (bits))
+#define perm_ok(cap,bits) (((cap) & (bits)) == (bits))
+
+static int check_direction(snd_seq_port_info_t *pinfo, int bit)
+{
+	int dir = snd_seq_port_info_get_direction(pinfo);
+	return !dir || (dir & bit);
+}
 
 static int check_permission(snd_seq_port_info_t *pinfo, int perm)
 {
-	if (perm) {
-		if (perm & LIST_INPUT) {
-			if (perm_ok(pinfo, SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_SUBS_READ))
-				goto __ok;
-		}
-		if (perm & LIST_OUTPUT) {
-			if (perm_ok(pinfo, SND_SEQ_PORT_CAP_WRITE|SND_SEQ_PORT_CAP_SUBS_WRITE))
-				goto __ok;
-		}
+	int cap = snd_seq_port_info_get_capability(pinfo);
+
+	if (cap & SND_SEQ_PORT_CAP_NO_EXPORT)
 		return 0;
+
+	if (!perm)
+		return 1;
+	if (perm & LIST_INPUT) {
+		if (perm_ok(cap, SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_SUBS_READ) &&
+		    check_direction(pinfo, SND_SEQ_PORT_DIR_INPUT))
+			return 1;
 	}
- __ok:
-	if (snd_seq_port_info_get_capability(pinfo) & SND_SEQ_PORT_CAP_NO_EXPORT)
-		return 0;
-	return 1;
+	if (perm & LIST_OUTPUT) {
+		if (perm_ok(cap, SND_SEQ_PORT_CAP_WRITE|SND_SEQ_PORT_CAP_SUBS_WRITE) &&
+		    check_direction(pinfo, SND_SEQ_PORT_DIR_OUTPUT))
+			return 1;
+	}
+	return 0;
 }
 
 /*
@@ -151,18 +175,23 @@ static void do_search_port(snd_seq_t *seq, int perm, action_func_t do_action)
 		/* reset query info */
 		snd_seq_port_info_set_client(pinfo, snd_seq_client_info_get_client(cinfo));
 		snd_seq_port_info_set_port(pinfo, -1);
+		if (show_all)
+			snd_seq_port_info_set_capability(pinfo, SND_SEQ_PORT_CAP_INACTIVE);
 		count = 0;
 		while (snd_seq_query_next_port(seq, pinfo) >= 0) {
 			if (check_permission(pinfo, perm)) {
 				do_action(seq, cinfo, pinfo, count);
 				count++;
 			}
+			if (show_all)
+				snd_seq_port_info_set_capability(pinfo, SND_SEQ_PORT_CAP_INACTIVE);
 		}
 	}
 }
 
 
-static void print_port(snd_seq_t *seq, snd_seq_client_info_t *cinfo,
+static void print_port(snd_seq_t *seq ATTRIBUTE_UNUSED,
+		       snd_seq_client_info_t *cinfo,
 		       snd_seq_port_info_t *pinfo, int count)
 {
 	if (! count) {
@@ -173,23 +202,29 @@ static void print_port(snd_seq_t *seq, snd_seq_client_info_t *cinfo,
 		       snd_seq_client_info_get_name(cinfo),
 		       (snd_seq_client_info_get_type(cinfo) == SND_SEQ_USER_CLIENT ?
 			_("user") : _("kernel")));
-
-#ifdef HAVE_SEQ_CLIENT_INFO_GET_CARD
+		switch (snd_seq_client_info_get_midi_version(cinfo)) {
+		case SND_SEQ_CLIENT_UMP_MIDI_1_0:
+			printf(",UMP-MIDI1");
+			break;
+		case SND_SEQ_CLIENT_UMP_MIDI_2_0:
+			printf(",UMP-MIDI2");
+			break;
+		}
 		card = snd_seq_client_info_get_card(cinfo);
-#endif
 		if (card != -1)
 			printf(",card=%d", card);
 
-#ifdef HAVE_SEQ_CLIENT_INFO_GET_PID
 		pid = snd_seq_client_info_get_pid(cinfo);
-#endif
 		if (pid != -1)
 			printf(",pid=%d", pid);
 		printf("]\n");
 	}
-	printf("  %3d '%-16s'\n",
+	printf("  %3d '%-16s'",
 	       snd_seq_port_info_get_port(pinfo),
 	       snd_seq_port_info_get_name(pinfo));
+	if (snd_seq_port_info_get_capability(pinfo) & SND_SEQ_PORT_CAP_INACTIVE)
+		printf(" [INACTIVE]");
+	printf("\n");
 }
 
 static void print_port_and_subs(snd_seq_t *seq, snd_seq_client_info_t *cinfo,
@@ -203,8 +238,10 @@ static void print_port_and_subs(snd_seq_t *seq, snd_seq_client_info_t *cinfo,
 /*
  * remove all (exported) connections
  */
-static void remove_connection(snd_seq_t *seq, snd_seq_client_info_t *cinfo,
-			      snd_seq_port_info_t *pinfo, int count)
+static void remove_connection(snd_seq_t *seq,
+			      snd_seq_client_info_t *info ATTRIBUTE_UNUSED,
+			      snd_seq_port_info_t *pinfo,
+			      int count ATTRIBUTE_UNUSED)
 {
 	snd_seq_query_subscribe_t *query;
 	snd_seq_port_info_t *port;
@@ -251,6 +288,8 @@ enum {
 	SUBSCRIBE, UNSUBSCRIBE, LIST, REMOVE_ALL
 };
 
+#define ACONNECT_OPTS "dior:t:elxa"
+
 static const struct option long_option[] = {
 	{"disconnect", 0, NULL, 'd'},
 	{"input", 0, NULL, 'i'},
@@ -260,6 +299,7 @@ static const struct option long_option[] = {
 	{"exclusive", 0, NULL, 'e'},
 	{"list", 0, NULL, 'l'},
 	{"removeall", 0, NULL, 'x'},
+	{"all", 0, NULL, 'a'},
 	{NULL, 0, NULL, 0},
 };
 
@@ -280,7 +320,7 @@ int main(int argc, char **argv)
 	textdomain(PACKAGE);
 #endif
 
-	while ((c = getopt_long(argc, argv, "dior:t:elx", long_option, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, ACONNECT_OPTS, long_option, NULL)) != -1) {
 		switch (c) {
 		case 'd':
 			command = UNSUBSCRIBE;
@@ -313,6 +353,10 @@ int main(int argc, char **argv)
 		case 'x':
 			command = REMOVE_ALL;
 			break;
+		case 'a':
+			command = LIST;
+			show_all = 1;
+			break;
 		default:
 			usage();
 			exit(1);
@@ -323,8 +367,12 @@ int main(int argc, char **argv)
 		fprintf(stderr, _("can't open sequencer\n"));
 		return 1;
 	}
-	
+
+#if SND_LIB_VER(1, 2, 15) < SND_LIB_VERSION
 	snd_lib_error_set_handler(error_handler);
+#else
+	original_log_handler = snd_lib_log_set_handler(log_handler);
+#endif
 
 	switch (command) {
 	case LIST:

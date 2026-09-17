@@ -25,7 +25,12 @@
  * Some cleanup from Daniel Caujolle-Bert <segfault@club-internet.fr>
  * Pink noise option added Nathan Hurst, 
  *   based on generator by Phil Burk (pink.c)
+ * ST-2095 noise option added Rick Sayre,
+ *   based on generator specified by SMPTE ST-2095:1-2015
+ *   Also switched to stable harmonic oscillator for sine
  *
+ * Changelog:
+ *   0.0.9 Added support for ST-2095 band-limited pink noise output, switched to harmonic oscillator for sine
  * Changelog:
  *   0.0.8 Added support for pink noise output.
  * Changelog:
@@ -36,6 +41,8 @@
  * $Id: speaker_test.c,v 1.00 2003/11/26 19:43:38 jcdutton Exp $
  */
 
+#include "aconfig.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,7 +51,8 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <ctype.h>
-#include <byteswap.h>
+#include <limits.h>
+#include "bswap.h"
 #include <signal.h>
 
 #define ALSA_PCM_NEW_HW_PARAMS_API
@@ -53,9 +61,10 @@
 #include <sys/time.h>
 #include <math.h>
 #include "pink.h"
-#include "aconfig.h"
+#include "st2095.h"
 #include "gettext.h"
 #include "version.h"
+#include "os_compat.h"
 
 #ifdef ENABLE_NLS
 #include <locale.h>
@@ -69,10 +78,11 @@ enum {
   TEST_PINK_NOISE = 1,
   TEST_SINE,
   TEST_WAV,
+  TEST_ST2095_NOISE,
   TEST_PATTERN,
 };
 
-#define MAX_CHANNELS	16
+#define MAX_CHANNELS	32
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define COMPOSE_ID(a,b,c,d)	((a) | ((b)<<8) | ((c)<<16) | ((d)<<24))
@@ -96,7 +106,7 @@ static unsigned int       rate        = 48000;	            /* stream rate */
 static unsigned int       channels    = 1;	            /* count of channels */
 static unsigned int       speaker     = 0;	            /* count of channels */
 static unsigned int       buffer_time = 0;	            /* ring buffer length in us */
-static unsigned int       period_time = 0;	            /* period time in us */
+static unsigned int	  period_time = UINT_MAX;	            /* period time in us */
 static unsigned int       nperiods    = 4;                  /* number of periods */
 static double             freq        = 440.0;              /* sinusoidal wave frequency in Hz */
 static int                test_type   = TEST_PINK_NOISE;    /* Test type. 1 = noise, 2 = sine wave */
@@ -132,7 +142,23 @@ static const char *const channel_name[MAX_CHANNELS] = {
   /* 12 */ N_("Channel 13"),
   /* 13 */ N_("Channel 14"),
   /* 14 */ N_("Channel 15"),
-  /* 15 */ N_("Channel 16")
+  /* 15 */ N_("Channel 16"),
+  /* 16 */ N_("Channel 17"),
+  /* 17 */ N_("Channel 18"),
+  /* 18 */ N_("Channel 19"),
+  /* 19 */ N_("Channel 20"),
+  /* 20 */ N_("Channel 21"),
+  /* 21 */ N_("Channel 22"),
+  /* 22 */ N_("Channel 23"),
+  /* 23 */ N_("Channel 24"),
+  /* 24 */ N_("Channel 25"),
+  /* 25 */ N_("Channel 26"),
+  /* 26 */ N_("Channel 27"),
+  /* 27 */ N_("Channel 28"),
+  /* 28 */ N_("Channel 29"),
+  /* 29 */ N_("Channel 30"),
+  /* 30 */ N_("Channel 31"),
+  /* 31 */ N_("Channel 32")
 };
 
 static const int	channels4[] = {
@@ -225,7 +251,7 @@ static int *order_channels(void)
 {
   /* create a (playback order => channel number) table with channels ordered
    * according to channel_order[] values */
-  int i;
+  unsigned int i;
   int *ordered_chs;
 
   ordered_chs = calloc(channel_map->channels, sizeof(*ordered_chs));
@@ -244,7 +270,7 @@ static int *order_channels(void)
 static int get_speaker_channel(int chn)
 {
 #ifdef CONFIG_SUPPORT_CHMAP
-  if (channel_map_set || (ordered_channels && chn >= channel_map->channels))
+  if (channel_map_set || (ordered_channels && (unsigned int)chn >= channel_map->channels))
     return chn;
   if (ordered_channels)
     return ordered_channels[chn];
@@ -270,12 +296,14 @@ static const char *get_channel_name(int chn)
 #ifdef CONFIG_SUPPORT_CHMAP
   if (channel_map) {
     const char *name = NULL;
-    if (chn < channel_map->channels)
+    if ((unsigned int)chn < channel_map->channels)
       name = snd_pcm_chmap_long_name(channel_map->pos[chn]);
     return name ? name : "Unknown";
   }
 #endif
-  return gettext(channel_name[chn]);
+  if (chn < MAX_CHANNELS)
+    return gettext(channel_name[chn]);
+  return "Unknown";
 }
 
 static const int	supported_formats[] = {
@@ -301,7 +329,7 @@ static void do_generate(uint8_t *frames, int channel, int count,
 			value_t (*generate)(void *), void *arg)
 {
   value_t res;
-  int    chn;
+  unsigned int chn;
   int8_t *samp8 = (int8_t*) frames;
   int16_t *samp16 = (int16_t*) frames;
   int32_t *samp32 = (int32_t*) frames;
@@ -309,7 +337,7 @@ static void do_generate(uint8_t *frames, int channel, int count,
 
   while (count-- > 0) {
     for(chn=0;chn<channels;chn++) {
-      if (chn==channel) {
+      if (chn==(unsigned int)channel) {
 	res = generate(arg);
       } else {
 	res.i = 0;
@@ -371,16 +399,17 @@ static void do_generate(uint8_t *frames, int channel, int count,
  * Sine generator
  */
 typedef struct {
-  double phase;
-  double max_phase;
-  double step;
+  double a;
+  double s;
+  double c;
 } sine_t;
 
 static void init_sine(sine_t *sine)
 {
-  sine->phase = 0;
-  sine->max_phase = 1.0 / freq;
-  sine->step = 1.0 / (double)rate;
+  // symplectic integration for fast, stable harmonic oscillator
+  sine->a = 2.0*M_PI * freq / rate;
+  sine->c = 1.0;
+  sine->s = 0.0;
 }
 
 static value_t generate_sine(void *arg)
@@ -388,13 +417,13 @@ static value_t generate_sine(void *arg)
   sine_t *sine = arg;
   value_t res;
 
-  res.f = sin((sine->phase * 2 * M_PI) / sine->max_phase - M_PI);
-  res.f *= generator_scale;
+  res.f = sine->s * generator_scale;
   if (format != SND_PCM_FORMAT_FLOAT_LE)
     res.i = res.f * INT32_MAX;
-  sine->phase += sine->step;
-  if (sine->phase >= sine->max_phase)
-    sine->phase -= sine->max_phase;
+
+  // update the oscillator
+  sine->c -= sine->a * sine->s;
+  sine->s += sine->a * sine->c;
   return res;
 }
 
@@ -407,6 +436,20 @@ static value_t generate_pink_noise(void *arg)
   value_t res;
 
   res.f = generate_pink_noise_sample(pink) * generator_scale;
+  if (format != SND_PCM_FORMAT_FLOAT_LE)
+    res.i = res.f * INT32_MAX;
+  return res;
+}
+
+/* Band-Limited Pink Noise, per SMPTE ST 2095-1
+ * beyond speaker localization, this can be used for setting loudness to standard
+ */
+static value_t generate_st2095_noise(void *arg)
+{
+  st2095_noise_t *st2095 = arg;
+  value_t res;
+
+  res.f = generate_st2095_noise_sample(st2095);
   if (format != SND_PCM_FORMAT_FLOAT_LE)
     res.i = res.f * INT32_MAX;
   return res;
@@ -484,11 +527,15 @@ static int set_hwparams(snd_pcm_t *handle, snd_pcm_hw_params_t *params, snd_pcm_
   printf(_("Buffer size range from %lu to %lu\n"),buffer_size_min, buffer_size_max);
   printf(_("Period size range from %lu to %lu\n"),period_size_min, period_size_max);
   if (period_time > 0) {
-    printf(_("Requested period time %u us\n"), period_time);
-    err = snd_pcm_hw_params_set_period_time_near(handle, params, &period_time, NULL);
+    unsigned int tmp = period_time;
+    if (period_time > 0 && period_time < UINT_MAX)
+      printf(_("Requested period time %u us\n"), period_time);
+    else
+      tmp = 250000; /* 0.25 second */
+    err = snd_pcm_hw_params_set_period_time_near(handle, params, &tmp, NULL);
     if (err < 0) {
       fprintf(stderr, _("Unable to set period time %u us for playback: %s\n"),
-	     period_time, snd_strerror(err));
+	     tmp, snd_strerror(err));
       return err;
     }
   }
@@ -757,14 +804,30 @@ static int setup_wav_file(int chn)
     "Channel_13.wav",
     "Channel_14.wav",
     "Channel_15.wav",
-    "Channel_16.wav"
+    "Channel_16.wav",
+    "Channel_17.wav",
+    "Channel_18.wav",
+    "Channel_19.wav",
+    "Channel_20.wav",
+    "Channel_21.wav",
+    "Channel_22.wav",
+    "Channel_23.wav",
+    "Channel_24.wav",
+    "Channel_25.wav",
+    "Channel_26.wav",
+    "Channel_27.wav",
+    "Channel_28.wav",
+    "Channel_29.wav",
+    "Channel_30.wav",
+    "Channel_31.wav",
+    "Channel_32.wav"
   };
 
   if (given_test_wav_file)
     return check_wav_file(chn, given_test_wav_file);
 
 #ifdef CONFIG_SUPPORT_CHMAP
-  if (channel_map && chn < channel_map->channels) {
+  if (channel_map && (unsigned int)chn < channel_map->channels) {
     int channel = channel_map->pos[chn] - SND_CHMAP_FL;
     if (channel >= 0 && channel < MAX_CHANNELS)
       return check_wav_file(chn, wavs[channel]);
@@ -803,9 +866,9 @@ static int read_wav(uint16_t *buf, int channel, int offset, int bufsize)
     bufsize = wav_file_size[channel] - offset;
   bufsize /= channels;
   for (size = 0; size < bufsize; size += 2) {
-    int chn;
+    unsigned int chn;
     for (chn = 0; chn < channels; chn++) {
-      if (chn == channel) {
+      if (chn == (unsigned int)channel) {
 	if (fread(buf, 2, 1, wavfp) != 1)
 	  return size;
       }
@@ -851,10 +914,14 @@ static int write_buffer(snd_pcm_t *handle, uint8_t *ptr, int cptr)
 static int pattern;
 static sine_t sine;
 static pink_noise_t pink;
+static st2095_noise_t st2095;
 
 static void init_loop(void)
 {
   switch (test_type) {
+  case TEST_ST2095_NOISE:
+    initialize_st2095_noise(&st2095, rate);
+    break;
   case TEST_PINK_NOISE:
     initialize_pink_noise(&pink, 16);
     break;
@@ -869,19 +936,21 @@ static void init_loop(void)
 
 static int write_loop(snd_pcm_t *handle, int channel, int periods, uint8_t *frames)
 {
-  int    err, n;
+  unsigned int cnt;
+  int n;
+  int err;
 
   fflush(stdout);
   if (test_type == TEST_WAV) {
     int bufsize = snd_pcm_frames_to_bytes(handle, period_size);
-    n = 0;
-    while ((err = read_wav((uint16_t *)frames, channel, n, bufsize)) > 0 && !in_aborting) {
-      n += err;
+    cnt = 0;
+    while ((err = read_wav((uint16_t *)frames, channel, cnt, bufsize)) > 0 && !in_aborting) {
+      cnt += err;
       if ((err = write_buffer(handle, frames,
 			      snd_pcm_bytes_to_frames(handle, err * channels))) < 0)
 	break;
     }
-    if (buffer_size > n && !in_aborting) {
+    if (buffer_size > cnt && !in_aborting) {
       snd_pcm_drain(handle);
       snd_pcm_prepare(handle);
     }
@@ -897,7 +966,12 @@ static int write_loop(snd_pcm_t *handle, int channel, int periods, uint8_t *fram
       do_generate(frames, channel, period_size, generate_pink_noise, &pink);
     else if (test_type == TEST_PATTERN)
       do_generate(frames, channel, period_size, generate_pattern, &pattern);
-    else
+    else if (test_type == TEST_ST2095_NOISE) {
+      reset_st2095_noise_measurement(&st2095);
+      do_generate(frames, channel, period_size, generate_st2095_noise, &st2095);
+      printf(_("\tSMPTE ST-2095 noise batch was %2.2fdB RMS\n"),
+	compute_st2095_noise_measurement(&st2095, period_size));
+    } else
       do_generate(frames, channel, period_size, generate_sine, &sine);
 
     if ((err = write_buffer(handle, frames, period_size)) < 0)
@@ -949,7 +1023,7 @@ static void help(void)
 	   "-b,--buffer	ring buffer size in us\n"
 	   "-p,--period	period size in us\n"
 	   "-P,--nperiods	number of periods\n"
-	   "-t,--test	pink=use pink noise, sine=use sine wave, wav=WAV file\n"
+	   "-t,--test	pink=use pink noise, sine=use sine wave, st2095=use SMPTE ST-2095 noise, wav=WAV file\n"
 	   "-l,--nloops	specify number of loops to test, 0 = infinite\n"
 	   "-s,--speaker	single speaker test. Values 1=Left, 2=right, etc\n"
 	   "-w,--wavfile	Use the given WAV file as a test sound\n"
@@ -974,7 +1048,7 @@ int main(int argc, char *argv[]) {
   snd_pcm_hw_params_t  *hwparams;
   snd_pcm_sw_params_t  *swparams;
   uint8_t              *frames;
-  int                   chn;
+  unsigned int          chn;
   const int	       *fmt;
   double		time1,time2,time3;
   unsigned int		n, nloops;
@@ -1062,11 +1136,11 @@ int main(int argc, char *argv[]) {
       break;
     case 'b':
       buffer_time = atoi(optarg);
-      buffer_time = buffer_time > 1000000 ? 1000000 : buffer_time;
+      buffer_time = buffer_time > 100000000 ? 100000000 : buffer_time;
       break;
     case 'p':
       period_time = atoi(optarg);
-      period_time = period_time > 1000000 ? 1000000 : period_time;
+      period_time = period_time > 100000000 ? 100000000 : period_time;
       break;
     case 'P':
       nperiods = atoi(optarg);
@@ -1078,9 +1152,16 @@ int main(int argc, char *argv[]) {
     case 't':
       if (*optarg == 'p')
 	test_type = TEST_PINK_NOISE;
-      else if (*optarg == 's')
-	test_type = TEST_SINE;
-      else if (*optarg == 'w')
+      else if (*optarg == 's') {
+	if (optarg[1] == 'i')
+	  test_type = TEST_SINE;
+	else if (optarg[1] == 't')
+	  test_type = TEST_ST2095_NOISE;
+	else {
+	  fprintf(stderr, _("Invalid test type %s\n"), optarg);
+	  exit(1);
+	}
+      } else if (*optarg == 'w')
 	test_type = TEST_WAV;
       else if (*optarg == 't')
 	test_type = TEST_PATTERN;
@@ -1156,6 +1237,9 @@ int main(int argc, char *argv[]) {
   printf(_("Playback device is %s\n"), device);
   printf(_("Stream parameters are %iHz, %s, %i channels\n"), rate, snd_pcm_format_name(format), channels);
   switch (test_type) {
+  case TEST_ST2095_NOISE:
+    printf(_("Using SMPTE ST-2095 -18.5dB AES FS band-limited pink noise\n"));
+    break;
   case TEST_PINK_NOISE:
     printf(_("Using 16 octaves of pink noise\n"));
     break;

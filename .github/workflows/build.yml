@@ -11,10 +11,10 @@ jobs:
     - name: Prepare environment
       run: |
         dnf -y upgrade
-        dnf -y install @development-tools libtool bzip2 gettext-devel ncurses-devel
+        dnf -y install @development-tools libtool bzip2 gettext-devel ncurses-devel awk
 
     - name: Checkout alsa-lib
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         repository: alsa-project/alsa-lib
         ref: master
@@ -22,6 +22,7 @@ jobs:
     - name: Configure alsa-lib
       run: |
         cd alsa-lib
+        head -5 configure.ac
         libtoolize --force --copy --automake
         aclocal
         autoheader
@@ -40,20 +41,21 @@ jobs:
         make install
 
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         path: alsa-utils
     - name: Checkout all tags
       run: |
         cd alsa-utils
-        git fetch --prune --tags
-        git fetch --prune --unshallow
+        git fetch --prune --tags --force
+        git fetch --prune --unshallow --force
     - name: Modify version
       run: |
         cd alsa-utils
         mv configure.ac configure.ac.old
         version=$(git describe | sed -e 's/v//')
         if test -z "$version"; then version=$(git describe --tags | sed -e 's/v//'); fi
+        if test -z "$version"; then version1=$(cat configure.ac.old | grep "AC_INIT(.*)" | cut -d ' ' -f 2 | sed -e 's/)//'); version2=$(git rev-parse --short HEAD); version="${version1}-g${version2}"; fi
         echo "Version: ${version}"
         sed -r "s/AC_INIT\(alsa-utils,.*\)/AC_INIT(alsa-utils, ${version})/" < configure.ac.old > configure.ac.tmp
         sed -e 's;po/Makefile.in;;' < configure.ac.tmp > configure.ac
@@ -61,8 +63,10 @@ jobs:
     - name: Configure
       run: |
         cd alsa-utils
+        head -5 configure.ac
         aclocal
         gettextize -c -f --no-changelog
+        libtoolize --force --copy --automake
         aclocal -I m4
         autoheader
         automake --foreign --copy --add-missing
@@ -105,7 +109,7 @@ jobs:
         cd alsa-utils-$(cat version)
         make install
     - name: Archive package
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: alsa-utils-test-package
         path: artifacts/
@@ -124,7 +128,7 @@ jobs:
         apt-get install -y git build-essential pkg-config m4 autoconf automake libtool gettext ncurses-dev
 
     - name: Checkout alsa-lib
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         repository: alsa-project/alsa-lib
         ref: master
@@ -145,13 +149,14 @@ jobs:
         make install
 
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
     - name: Configure
       run: |
         mv configure.ac configure.ac.old
         sed -e 's;po/Makefile.in;;' < configure.ac.old > configure.ac
         aclocal
         gettextize -c -f --no-changelog
+        libtoolize --force --copy --automake
         aclocal -I m4
         autoheader
         automake --foreign --copy --add-missing

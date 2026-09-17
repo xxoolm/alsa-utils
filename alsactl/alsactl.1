@@ -8,6 +8,8 @@ alsactl \- advanced controls for ALSA soundcard driver
 
 \fBalsactl\fP \fImonitor\fP <card # or id>
 
+\fBalsactl\fP \fIinfo\fP <card # or id>
+
 \fBalsactl\fP [\fIclean\fP] <card # or id or device> [[control identifiers]]
 
 .SH DESCRIPTION
@@ -62,6 +64,11 @@ rescan, save_and_quit).
 This command is for monitoring the events received from the given
 control device.
 
+.SS info <card>
+
+This command shows the general information in the YAML format
+collected from the given control device (sound card).
+
 .SS clean <card> [filter]
 
 This command cleans the controls created by applications.
@@ -83,7 +90,7 @@ Note that the configuration hooks are evaluated.
 .SH OPTIONS
 
 .TP
-\fI\-h, \-\-help\fP 
+\fI\-h, \-\-help\fP
 Help: show available flags and commands.
 
 .TP
@@ -216,7 +223,7 @@ aplay(1),
 alsactl_init(7)
 \fP
 
-.SH BUGS 
+.SH BUGS
 None known.
 
 .SH AUTHOR

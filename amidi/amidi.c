@@ -20,6 +20,8 @@
  */
 
 #define _GNU_SOURCE
+#include "aconfig.h"
+#include "version.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -37,8 +39,6 @@
 #include <fcntl.h>
 #include <alsa/asoundlib.h>
 #include <time.h>
-#include "aconfig.h"
-#include "version.h"
 
 #define NSEC_PER_SEC 1000000000L
 
@@ -57,6 +57,7 @@ static int stop;
 static int sysex_interval;
 static snd_rawmidi_t *input, **inputp;
 static snd_rawmidi_t *output, **outputp;
+static int list_all;
 
 static void error(const char *format, ...)
 {
@@ -76,6 +77,7 @@ static void usage(void)
 		"-h, --help                      this help\n"
 		"-V, --version                   print current version\n"
 		"-l, --list-devices              list all hardware ports\n"
+		"-x, --list-inactive             list inactive ports, too\n"
 		"-L, --list-rawmidis             list all RawMIDI definitions\n"
 		"-p, --port=name                 select port by name\n"
 		"-s, --send=file                 send the contents of a (.syx) file\n"
@@ -85,7 +87,9 @@ static void usage(void)
 		"-T, --timestamp=...             adds a timestamp in front of each dumped message\n"
 		"                realtime\n"
 		"                monotonic\n"
+#ifdef CLOCK_MONOTONIC_RAW
 		"                raw\n"
+#endif
 		"-t, --timeout=seconds           exits when no data has been received\n"
 		"                                for the specified duration\n"
 		"-a, --active-sensing            include active sensing bytes\n"
@@ -149,6 +153,9 @@ static void list_device(snd_ctl_t *ctl, int card, int device)
 			      card, device, sub, snd_strerror(err));
 			return;
 		}
+		if (!list_all &&
+		    (snd_rawmidi_info_get_flags(info) & SNDRV_RAWMIDI_INFO_STREAM_INACTIVE))
+			continue;
 		name = snd_rawmidi_info_get_name(info);
 		sub_name = snd_rawmidi_info_get_subdevice_name(info);
 		if (sub == 0 && sub_name[0] == '\0') {
@@ -433,20 +440,18 @@ static void print_byte(unsigned char byte, struct timespec *ts)
 			fputs("\n  ", stdout);
 	}
 
-	if (newline) {
-		printf("\n");
-
+	putchar(newline ? '\n' : ' ');
+	if (newline && do_print_timestamp) {
 		/* Nanoseconds does not make a lot of sense for serial MIDI (the
 		 * 31250 bps one) but I'm not sure about MIDI over USB.
 		 */
-		if (do_print_timestamp)
-			printf("%lld.%.9ld) ", (long long)ts->tv_sec, ts->tv_nsec);
+		printf("%lld.%.9ld) ", (long long)ts->tv_sec, ts->tv_nsec);
 	}
 
 	printf("%02X", byte);
 }
 
-static void sig_handler(int dummy)
+static void sig_handler(int sig ATTRIBUTE_UNUSED)
 {
 	stop = 1;
 }
@@ -471,11 +476,12 @@ static void add_send_hex_data(const char *str)
 
 int main(int argc, char *argv[])
 {
-	static const char short_options[] = "hVlLp:s:r:S::dt:aci:T:";
+	static const char short_options[] = "hVlxLp:s:r:S::dt:aci:T:";
 	static const struct option long_options[] = {
 		{"help", 0, NULL, 'h'},
 		{"version", 0, NULL, 'V'},
 		{"list-devices", 0, NULL, 'l'},
+		{"list-inactive", 0, NULL, 'x'},
 		{"list-rawmidis", 0, NULL, 'L'},
 		{"port", 1, NULL, 'p'},
 		{"send", 1, NULL, 's'},
@@ -508,6 +514,9 @@ int main(int argc, char *argv[])
 		case 'l':
 			do_device_list = 1;
 			break;
+		case 'x':
+			list_all = 1;
+			break;
 		case 'L':
 			do_rawmidi_list = 1;
 			break;
@@ -536,8 +545,10 @@ int main(int argc, char *argv[])
 				cid = CLOCK_REALTIME;
 			else if (strcasecmp(optarg, "monotonic") == 0)
 				cid = CLOCK_MONOTONIC;
+#ifdef CLOCK_MONOTONIC_RAW
 			else if (strcasecmp(optarg, "raw") == 0)
 				cid = CLOCK_MONOTONIC_RAW;
+#endif
 			else
 				error("Clock type not known");
 			break;

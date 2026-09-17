@@ -26,6 +26,7 @@
 #define ARRAY_SIZE(a) (sizeof (a) / sizeof (a)[0])
 
 #define MAX_CONFIGS_IN_TEMPLATE	32
+
 struct config_template_items {
 	char *int_config_ids[MAX_CONFIGS_IN_TEMPLATE];
 	char *string_config_ids[MAX_CONFIGS_IN_TEMPLATE];
@@ -69,6 +70,10 @@ int tplg_build_mixer_control(struct tplg_pre_processor *tplg_pp, snd_config_t *o
 			      snd_config_t *parent);
 int tplg_build_bytes_control(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
 			      snd_config_t *parent);
+int tplg_build_enum_control(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
+			     snd_config_t *parent);
+int tplg_build_text_object(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
+			   snd_config_t *parent);
 int tplg_build_dapm_route_object(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
 			      snd_config_t *parent);
 int tplg_build_hw_cfg_object(struct tplg_pre_processor *tplg_pp,

@@ -20,6 +20,7 @@
  *
  */
 
+#include "aconfig.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,7 @@
 #include <syslog.h>
 #include <signal.h>
 #include "alsaloop.h"
+#include "os_compat.h"
 
 struct loopback_thread {
 	int threaded;
@@ -384,6 +386,7 @@ static int parse_config(int argc, char *argv[], snd_output_t *output,
 		{"ossmixer", 1, NULL, 'O'},
 		{"workaround", 1, NULL, 'w'},
 		{"xrun", 0, NULL, 'U'},
+		{"wake", 1, NULL, 'W'},
 		{"syslog", 0, NULL, 'z'},
 		{NULL, 0, NULL, 0},
 	};
@@ -403,7 +406,7 @@ static int parse_config(int argc, char *argv[], snd_output_t *output,
 	snd_pcm_uframes_t arg_period_size = 0;
 	unsigned long arg_loop_time = ~0UL;
 	int arg_nblock = 0;
-	int arg_effect = 0;
+	// int arg_effect = 0;
 	int arg_resample = 0;
 #ifdef USE_SAMPLERATE
 	int arg_samplerate = SRC_SINC_FASTEST + 1;
@@ -423,7 +426,7 @@ static int parse_config(int argc, char *argv[], snd_output_t *output,
 	while (1) {
 		int c;
 		if ((c = getopt_long(argc, argv,
-				"hdg:P:C:X:Y:x:l:t:F:f:c:r:s:benvA:S:a:m:T:O:w:UW:z",
+				"hg:dP:C:X:Y:x:l:t:f:c:r:B:E:s:benvA:S:a:T:m:O:w:UW:z",
 				long_option, NULL)) < 0)
 			break;
 		switch (c) {
@@ -491,7 +494,7 @@ static int parse_config(int argc, char *argv[], snd_output_t *output,
 			arg_nblock = 1;
 			break;
 		case 'e':
-			arg_effect = 1;
+			// arg_effect = 1;
 			break;
 		case 'n':
 			arg_resample = 1;
@@ -819,7 +822,7 @@ static void send_to_all(int sig)
 	}
 }
 
-static void signal_handler(int sig)
+static void signal_handler(int sig ATTRIBUTE_UNUSED)
 {
 	quit = 1;
 	send_to_all(SIGUSR2);

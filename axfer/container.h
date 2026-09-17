@@ -9,6 +9,8 @@
 #ifndef __ALSA_UTILS_AXFER_CONTAINER__H_
 #define __ALSA_UTILS_AXFER_CONTAINER__H_
 
+#include "aconfig.h"
+
 #define _LARGEFILE64_SOURCE
 #include <sys/types.h>
 
@@ -16,6 +18,8 @@
 #include <stdint.h>
 
 #include <alsa/asoundlib.h>
+
+#include "os_compat.h"
 
 enum container_type {
 	CONTAINER_TYPE_PARSER = 0,
@@ -58,7 +62,7 @@ struct container_context {
 	uint64_t handled_byte_count;
 };
 
-const char *const container_suffix_from_format(enum container_format format);
+const char *container_suffix_from_format(enum container_format format);
 enum container_format container_format_from_path(const char *path);
 int container_parser_init(struct container_context *cntr, int fd,
 			  unsigned int verbose);
@@ -107,7 +111,7 @@ int container_recursive_read(struct container_context *cntr, void *buf,
 			     unsigned int byte_count);
 int container_recursive_write(struct container_context *cntr, void *buf,
 			      unsigned int byte_count);
-int container_seek_offset(struct container_context *cntr, off64_t offset);
+int container_seek_offset(struct container_context *cntr, off_t offset);
 
 extern const struct container_parser container_parser_riff_wave;
 extern const struct container_builder container_builder_riff_wave;

@@ -17,11 +17,13 @@
   The full GNU General Public License is included in this distribution
   in the file called LICENSE.GPL.
 */
+#include "aconfig.h"
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include <alsa/asoundlib.h>
 #include "gettext.h"
 #include "topology.h"
@@ -29,7 +31,8 @@
 
 /* Parse VendorToken object, create the "SectionVendorToken" and save it */
 int tplg_build_vendor_token_object(struct tplg_pre_processor *tplg_pp,
-				   snd_config_t *obj_cfg, snd_config_t *parent)
+				   snd_config_t *obj_cfg,
+				   snd_config_t *parent ATTRIBUTE_UNUSED)
 {
 	snd_config_iterator_t i, next;
 	snd_config_t *vtop, *n, *obj;
@@ -114,7 +117,7 @@ int tplg_parent_update(struct tplg_pre_processor *tplg_pp, snd_config_t *parent,
 		return ret;
 
 	/* get section config */
-	if (!strcmp(section_name, "tlv")) {
+	if (!strcmp(section_name, "tlv") || !strcmp(section_name, "texts")) {
 		/* set tlv name if config exists already */
 		ret = snd_config_search(cfg, section_name, &item_config);
 			if (ret < 0) {
@@ -194,7 +197,7 @@ int tplg_build_data_object(struct tplg_pre_processor *tplg_pp, snd_config_t *obj
 	return tplg_parent_update(tplg_pp, parent, "data", name);
 }
 
-static int tplg_create_config_template(struct tplg_pre_processor *tplg_pp,
+static int tplg_create_config_template(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
 				       snd_config_t **template,
 				       const struct config_template_items *items)
 {
@@ -497,7 +500,7 @@ min_max_check:
 }
 
 /* get object's name attribute value */
-const char *tplg_object_get_name(struct tplg_pre_processor *tplg_pp,
+const char *tplg_object_get_name(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
 				 snd_config_t *object)
 {
 	snd_config_t *cfg;
@@ -516,7 +519,7 @@ const char *tplg_object_get_name(struct tplg_pre_processor *tplg_pp,
 }
 
 /* look up the instance of object in a config */
-static snd_config_t *tplg_object_lookup_in_config(struct tplg_pre_processor *tplg_pp,
+static snd_config_t *tplg_object_lookup_in_config(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
 						  snd_config_t *class, const char *type,
 						  const char *class_name, const char *id)
 {
@@ -539,8 +542,8 @@ static int tplg_pp_add_object_tuple_section(struct tplg_pre_processor *tplg_pp,
 					    const char *token_ref, const char *array_name)
 {
 	snd_config_t *top, *tuple_cfg, *child, *cfg, *new;
-	const char *id;
-	char *token, *type, *str;
+	const char *id, *type;
+	char *token, *str;
 	long tuple_value;
 	int ret;
 
@@ -975,7 +978,7 @@ template:
 }
 
 static int tplg_build_generic_object(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
-				     snd_config_t *parent)
+				     snd_config_t *parent ATTRIBUTE_UNUSED)
 {
 	snd_config_t *wtop;
 	const char *name;
@@ -1035,6 +1038,15 @@ const struct config_template_items bytes_control_config = {
 	.compound_config_ids = {"access"}
 };
 
+const struct config_template_items enum_control_config = {
+	.int_config_ids = {"index"},
+	.compound_config_ids = {"access"}
+};
+
+const struct config_template_items text_config = {
+	.compound_config_ids = {"values"}
+};
+
 const struct config_template_items scale_config = {
 	.int_config_ids = {"min", "step", "mute"},
 };
@@ -1070,6 +1082,7 @@ const struct build_function_map object_build_map[] = {
 	{"Base", "ops", "ops" ,&tplg_build_ops_object, NULL, &ops_config},
 	{"Base", "extops", "extops" ,&tplg_build_ops_object, NULL, &ops_config},
 	{"Base", "channel", "channel", &tplg_build_channel_object, NULL, &channel_config},
+	{"Base", "text", "SectionText", &tplg_build_text_object, NULL, &text_config},
 	{"Base", "VendorToken", "SectionVendorTokens", &tplg_build_vendor_token_object,
 	 NULL, NULL},
 	{"Base", "hw_config", "SectionHWConfig", &tplg_build_hw_cfg_object, NULL,
@@ -1082,13 +1095,15 @@ const struct build_function_map object_build_map[] = {
 	 &mixer_control_config},
 	{"Control", "bytes", "SectionControlBytes", &tplg_build_bytes_control, NULL,
 	 &bytes_control_config},
+	 {"Control", "enum", "SectionControlEnum", &tplg_build_enum_control, NULL,
+	 &enum_control_config},
 	{"Dai", "", "SectionBE", &tplg_build_generic_object, NULL, &be_dai_config},
 	{"PCM", "pcm", "SectionPCM", &tplg_build_generic_object, NULL, &pcm_config},
 	{"PCM", "pcm_caps", "SectionPCMCapabilities", &tplg_build_pcm_caps_object,
 	 NULL, &pcm_caps_config},
 };
 
-static const struct build_function_map *tplg_object_get_map(struct tplg_pre_processor *tplg_pp,
+static const struct build_function_map *tplg_object_get_map(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
 							    snd_config_t *obj)
 {
 	snd_config_iterator_t first;
@@ -1143,7 +1158,7 @@ snd_config_t *tplg_object_get_section(struct tplg_pre_processor *tplg_pp, snd_co
 }
 
 /* return 1 if attribute not found in search_config, 0 on success and negative value on error */
-static int tplg_object_copy_and_add_param(struct tplg_pre_processor *tplg_pp,
+static int tplg_object_copy_and_add_param(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
 					  snd_config_t *obj,
 					  snd_config_t *attr_cfg,
 					  snd_config_t *search_config)
@@ -1349,8 +1364,8 @@ static int tplg_object_pre_process_children(struct tplg_pre_processor *tplg_pp,
 	return 0;
 }
 
-static int tplg_construct_object_name(struct tplg_pre_processor *tplg_pp, snd_config_t *obj,
-				      snd_config_t *class_cfg)
+static int tplg_construct_object_name(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
+				      snd_config_t *obj, snd_config_t *class_cfg)
 {
 	snd_config_iterator_t i, next;
 	snd_config_t *args, *n;
@@ -1545,7 +1560,7 @@ static int tplg_object_set_unique_attribute(struct tplg_pre_processor *tplg_pp,
  * Helper function to get object instance config which is 2 nodes down from class_type config.
  * ex: Get the pointer to the config node with ID "0" from the input config Widget.pga.0 {}
  */
-snd_config_t *tplg_object_get_instance_config(struct tplg_pre_processor *tplg_pp,
+snd_config_t *tplg_object_get_instance_config(struct tplg_pre_processor *tplg_pp ATTRIBUTE_UNUSED,
 					snd_config_t *class_type)
 {
 	snd_config_iterator_t first;
@@ -1588,6 +1603,7 @@ pre_process_object_variables_expand_fcn(snd_config_t **dst, const char *str, voi
 	snd_config_t *object_cfg = tplg_pp->current_obj_cfg;
 	snd_config_t *conf_defines;
 	const char *object_id;
+	const char *val;
 	int ret;
 
 	ret = snd_config_search(tplg_pp->input_cfg, "Define", &conf_defines);
@@ -1599,17 +1615,201 @@ pre_process_object_variables_expand_fcn(snd_config_t **dst, const char *str, voi
 	if (ret >= 0)
 		return ret;
 
+	/* No global define found, proceeed to object attribute search */
 	if (snd_config_get_id(object_cfg, &object_id) < 0)
 		return -EINVAL;
 
 	/* find variable from object attribute values if not found in global definitions */
 	ret = pre_process_find_variable(dst, str, object_cfg);
-	if (ret < 0)
+	if (ret < 0) {
 		SNDERR("Failed to find definition for attribute %s in '%s' object\n",
 		       str, object_id);
+		return ret;
+	}
+
+	/* the extracted value may contain a nested $-expression */
+	if (snd_config_get_string(*dst, &val) >= 0) {
+		if (val[0] == '$') {
+			char *var = strdup(val);
+
+			snd_config_delete(*dst);
+			ret = snd_config_evaluate_string(dst, var,
+							 pre_process_object_variables_expand_fcn,
+							 tplg_pp);
+			free(var);
+		}
+	}
 
 	return ret;
 }
+
+/*
+ * Searches for the first '$VAR_NAME' or '$[<contents>]' occurrence in
+ * *stringp. Allocates memory for it and copies it there. The
+ * allocated string is returned in '*varname'. If there was a prefix
+ * before $VAR_NAME, it is returned in '*prefix'. The *stringp is
+ * moved forward to the char after the $VAR_NAME.
+ *
+ * The end of $VAR_NAME is the first char that is not alpha numeric, '_',
+ * or '\0'.
+ *
+ * In '$[<contents>]' case all letters but '[' and ']' are allow in
+ * any sequence. Nested '[]' is also allowed if the number of '[' and
+ * ']' match.
+ *
+ * The function modifies *stringp, and *prefix - if not NULL - points
+ * to the original *stringp, *varname - if not NULL - is malloced and
+ * should be freed by the caller.
+ *
+ * Returns 0		if the *stringp was an empty string.
+ *         1		if *prefix or *varname was set
+ *         -ENOMEM	if malloc failed
+ */
+static int tplg_get_varname(char **stringp, char **prefix, char **varname)
+{
+	size_t prefix_len, varname_len = 0;
+
+	*prefix = NULL;
+	*varname = NULL;
+
+	prefix_len = strcspn(*stringp, "$");
+	*prefix = *stringp;
+	(*stringp) += prefix_len;
+	if (**stringp == '$') {
+		if ((*stringp)[1] == '[') {
+			int brackets = 1;
+			varname_len = 1;
+
+			do {
+				varname_len += strcspn((*stringp) + varname_len + 1, "[]") + 1;
+				if ((*stringp)[varname_len] == '[')
+					brackets++;
+				else if ((*stringp)[varname_len] == ']')
+					brackets--;
+				else
+					break;
+			}  while (brackets > 0);
+			if (brackets != 0)
+				return -EINVAL;
+			varname_len++;
+		} else {
+			varname_len = 1;
+			while (isalnum((*stringp)[varname_len]) || (*stringp)[varname_len] == '_')
+				varname_len++;
+		}
+	}
+
+	if (varname_len == 0 && prefix_len == 0)
+		return 0;
+
+	if (varname_len) {
+		*varname = malloc(varname_len + 1);
+		if (*varname == NULL)
+			return -ENOMEM;
+		strncpy(*varname, *stringp, varname_len);
+		(*varname)[varname_len] = '\0';
+		(*stringp) += varname_len;
+	}
+
+	if (prefix_len)
+		(*prefix)[prefix_len] = '\0';
+	else
+		*prefix = NULL;
+
+	return 1;
+}
+
+static int tplg_evaluate_config_string(struct tplg_pre_processor *tplg_pp,
+				    snd_config_t **dst, const char *s, const char *id)
+{
+	char *str = strdup(s);
+	char *varname, *prefix, *freep = str;
+	int ret;
+
+	if (!str)
+		return -ENOMEM;
+
+	*dst = NULL;
+
+	/* split the string and expand global definitions or object attribute values */
+	while (tplg_get_varname(&str, &prefix, &varname) == 1) {
+		const char *current_str;
+		char *temp;
+
+		if (prefix) {
+			if (*dst == NULL) {
+				ret = snd_config_make(dst, id, SND_CONFIG_TYPE_STRING);
+				if (ret < 0)
+					goto out;
+				ret = snd_config_set_string(*dst, prefix);
+				if (ret < 0)
+					goto out;
+			} else {
+				/* concat the prefix */
+				snd_config_get_string(*dst, &current_str);
+				temp = tplg_snprintf("%s%s", current_str, prefix);
+				if (!temp) {
+					ret = -ENOMEM;
+					goto out;
+				}
+
+				ret = snd_config_set_string(*dst, temp);
+				free(temp);
+				if (ret < 0)
+					goto out;
+			}
+		}
+
+		if (varname) {
+			snd_config_t *tmp_config;
+
+			ret = snd_config_evaluate_string(&tmp_config, varname,
+							 pre_process_object_variables_expand_fcn,
+							 tplg_pp);
+			if (ret < 0)
+				goto out;
+
+			if (*dst == NULL) {
+				*dst = tmp_config;
+			} else {
+				char *ascii;
+
+				snd_config_get_string(*dst, &current_str);
+
+				ret = snd_config_get_ascii(tmp_config, &ascii);
+				if (ret)
+					goto out;
+
+				temp = tplg_snprintf("%s%s", current_str, ascii);
+				free(ascii);
+
+				if (!temp) {
+					ret = -ENOMEM;
+					goto out;
+				}
+
+				ret = snd_config_set_string(*dst, temp);
+				free(temp);
+				snd_config_delete(tmp_config);
+				if (ret < 0)
+					goto out;
+			}
+			free(varname);
+		}
+	}
+
+	free(freep);
+	snd_config_set_id(*dst, id);
+
+	return 0;
+out:
+	if (*dst)
+		snd_config_delete(*dst);
+	free(varname);
+	free(freep);
+	return ret;
+}
+
 #endif
 
 /* build object config and its child objects recursively */
@@ -1672,20 +1872,18 @@ static int tplg_build_object(struct tplg_pre_processor *tplg_pp, snd_config_t *n
 		if (snd_config_get_string(n, &s) < 0)
 			continue;
 
-		if (*s != '$')
+		if (!strstr(s, "$"))
 			goto validate;
 
 		tplg_pp->current_obj_cfg = obj_local;
 
-		/* expand config */
-		ret = snd_config_evaluate_string(&new, s, pre_process_object_variables_expand_fcn,
-						 tplg_pp);
+		/* Expand definitions and object attribute references. */
+		ret = tplg_evaluate_config_string(tplg_pp, &new, s, id);
 		if (ret < 0) {
-			SNDERR("Failed to evaluate attributes %s in %s\n", id, class_id);
+			SNDERR("Failed to evaluate attributes %s in %s, from '%s'\n",
+			       id, class_id, s);
 			return ret;
 		}
-
-		snd_config_set_id(new, id);
 
 		ret = snd_config_merge(n, new, true);
 		if (ret < 0)
@@ -1793,7 +1991,7 @@ int tplg_pre_process_objects(struct tplg_pre_processor *tplg_pp, snd_config_t *c
 			 * 		ramp_step_ms 250
             		 * 	}
 			 * }
-			 * 
+			 *
 			 * While instantiating the volume-pipeline class, the pga object
 			 * could be modified as follows:
 			 * Object.Pipeline.volume-playback.0 {
@@ -1809,7 +2007,7 @@ int tplg_pre_process_objects(struct tplg_pre_processor *tplg_pp, snd_config_t *c
 			 * 	ramp_step_ms 250
 			 * 	format "s24le"
 			 * }
-			 */ 
+			 */
 
 			if (parent) {
 				snd_config_t *parent_instance, *parent_obj, *temp;

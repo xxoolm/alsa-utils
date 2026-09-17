@@ -70,6 +70,26 @@ int tplg_build_channel_object(struct tplg_pre_processor *tplg_pp, snd_config_t *
 	return tplg_build_base_object(tplg_pp, obj_cfg, parent, false);
 }
 
+int tplg_build_text_object(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
+			   snd_config_t *parent)
+{
+	snd_config_t *cfg;
+	const char *name;
+	int ret;
+
+	cfg = tplg_object_get_instance_config(tplg_pp, obj_cfg);
+
+	name = tplg_object_get_name(tplg_pp, cfg);
+	if (!name)
+		return -EINVAL;
+
+	ret = tplg_build_object_from_template(tplg_pp, obj_cfg, &cfg, NULL, false);
+	if (ret < 0)
+		return ret;
+
+	return tplg_parent_update(tplg_pp, parent, "texts", name);
+}
+
 int tplg_build_tlv_object(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
 			      snd_config_t *parent)
 {
@@ -131,6 +151,12 @@ int tplg_build_bytes_control(struct tplg_pre_processor *tplg_pp, snd_config_t *o
 	return tplg_build_control(tplg_pp, obj_cfg, parent, "bytes");
 }
 
+int tplg_build_enum_control(struct tplg_pre_processor *tplg_pp, snd_config_t *obj_cfg,
+			     snd_config_t *parent)
+{
+	return tplg_build_control(tplg_pp, obj_cfg, parent, "enum");
+}
+
 /*
  * Widget names for pipeline endpoints can be of the following type:
  * "class.<constructor args separated by .> ex: pga.0.1, buffer.1.1 etc
@@ -142,7 +168,8 @@ static int tplg_pp_get_widget_name(struct tplg_pre_processor *tplg_pp,
 {
 	snd_config_iterator_t i, next;
 	snd_config_t *temp_cfg, *child, *class_cfg, *n;
-	char *class_name, *args, *widget_name;
+	const char *args;
+	char *class_name, *widget_name;
 	int ret;
 
 	/* get class name */
@@ -195,8 +222,8 @@ static int tplg_pp_get_widget_name(struct tplg_pre_processor *tplg_pp,
 
 	/* construct widget name using the constructor argument values */
 	snd_config_for_each(i, next, temp_cfg) {
-		const char *id;
-		char *arg, *remaining, *temp;
+		const char *id, *remaining;
+		char *arg, *temp;
 
 		n = snd_config_iterator_entry(i);
 		if (snd_config_get_string(n, &id) < 0)
